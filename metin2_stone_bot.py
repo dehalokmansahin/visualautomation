@@ -1,272 +1,389 @@
 #!/usr/bin/env python3
 """
-MVP 1: Metin2 Stone Farming Bot - Educational Implementation
-Simple single-file implementation using Google Vertex AI Gemini
+Metin2 Stone Farming Bot - Complete SellMerchant Pattern Adoption
+Exact SellMerchant automation patterns with template matching stone detection
+Based on proven merchant automation methods and window handling
 """
 
-import os
 import time
-import base64
+import signal
+import sys
+import os
+from typing import Optional, Tuple, List, Dict
 import pyautogui
-from google import genai
-from google.genai.types import HttpOptions, Part
-from PIL import Image
-import io
-from dotenv import load_dotenv
+import win32gui as wn
+import logging
+from utils import click_on_window, find_template_location_colored, bring_window_to_foreground, is_fullscreen, toggle_fullscreen, find_all_template_locations
+from constants import CLICK_DELAY, MAX_WINDOW_WAIT, WINDOW_CHECK_INTERVAL, DEFAULT_CONFIDENCE
 
-# Load environment variables
-load_dotenv()
+# Configure logging following merchant automation style
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class SimpleStoneBot:
-    """MVP 1 Metin2 Stone Bot - Basic functionality only"""
+class StoneBot:
+    """Stone farming bot for Metin2 using exact SellMerchant patterns"""
     
-    # MVP 1 Configuration
-    MAX_DAILY_REQUESTS = 500
-    REQUEST_DELAY = 3
-    DAILY_COST_LIMIT = 1.0
+    def __init__(self):
+        """Initialize bot with merchant automation configuration - SellMerchant pattern"""
+        # SellMerchant pattern: Core state variables
+        self.hwnd = None
+        self.all_screen_region = None
+        self.running = False
+        
+        # SellMerchant pattern: item_locations for caching (stone_locations in our case)
+        self.stone_locations: Dict[str, List[Tuple[int, int, int, int, float]]] = {}
+        
+        # SellMerchant pattern: Statistics tracking
+        self.stats = {
+            'detections': 0,
+            'clicks': 0,
+            'failures': 0,
+            'start_time': None
+        }
+        
+        # SellMerchant pattern: Configuration with constants
+        self.stone_template_path = "ornekresim.png"
+        self.scan_interval = 1.0  # Scan every 1 second
+        self.click_delay = CLICK_DELAY  # From constants.py (0.5s)
+        self.max_failures = 5
+        self.consecutive_failures = 0
+        
+        # Metin2 window titles for FindWindow
+        self.metin2_window_titles = ["Rüya | 1-99", "R�ya | 1-99", "Metin2", "METIN2"]
+        
+        # SellMerchant pattern: Find window on initialization
+        self.hwnd = self._find_metin2_window()
+        if not self.hwnd:
+            logger.error("Metin2 window not found! Please start Metin2 first.")
+        else:
+            logger.info(f"StoneBot initialized with window handle: {self.hwnd}")
+        
+        # Setup signal handler for graceful shutdown
+        signal.signal(signal.SIGINT, self._signal_handler)
     
-    # Simple stone detection prompt
-    STONE_DETECTION_PROMPT = """
-    Look at this Metin2 game screen and find stones/minerals that can be mined.
-    Return ONLY coordinates in this format: X,Y
-    If multiple stones, return the closest to screen center.
-    If no stones found, return coordinates of the closest stone to screen center.
-    Example: 450,320
-    """
+    def _signal_handler(self, signum, frame):
+        """Handle Ctrl+C graceful shutdown"""
+        logger.info("Shutdown signal received...")
+        self.running = False
     
-    def __init__(self, project_id):
-        """Initialize with minimal setup"""
-        self.project_id = project_id
-        self.request_count = 0
-        self.setup_gemini()
-        print("✅ MVP 1 Stone Bot initialized")
-        print(f"📊 Daily request limit: {self.MAX_DAILY_REQUESTS}")
-    
-    def setup_gemini(self):
-        """Basic Gemini setup"""
+    def _find_metin2_window(self) -> Optional[int]:
+        """Find Metin2 window using SellMerchant pattern - return window handle"""
         try:
-            self.client = genai.Client(
-                http_options=HttpOptions(api_version="v1"),
-                project=self.project_id,
-                location="us-central1"
-            )
-            print("✅ Gemini client initialized")
+            logger.info("Searching for Metin2 window using SellMerchant pattern...")
+            
+            # SellMerchant pattern: Try each window title
+            for window_title in self.metin2_window_titles:
+                hwnd = wn.FindWindow(None, window_title)
+                if hwnd:
+                    logger.info(f"Found Metin2 window: '{window_title}' (HWND: {hwnd})")
+                    return hwnd
+            
+            # Fallback: Enumerate windows if direct FindWindow fails
+            def enum_windows_callback(hwnd, windows):
+                if wn.IsWindowVisible(hwnd):
+                    window_title = wn.GetWindowText(hwnd)
+                    if any(title in window_title for title in self.metin2_window_titles):
+                        # Filter out editor windows
+                        if "cursor" not in window_title.lower() and "vs" not in window_title.lower():
+                            windows.append((hwnd, window_title))
+                            logger.info(f"Found potential window: '{window_title}' (HWND: {hwnd})")
+                return True
+            
+            windows = []
+            wn.EnumWindows(enum_windows_callback, windows)
+            
+            if windows:
+                hwnd, title = windows[0]
+                logger.info(f"Using enumerated window: '{title}' (HWND: {hwnd})")
+                return hwnd
+            
+            logger.error("No Metin2 window found")
+            return None
+            
         except Exception as e:
-            print(f"❌ Failed to setup Gemini: {e}")
-            raise
-    
-    def take_screenshot(self):
-        """Simple full screen screenshot"""
-        try:
-            screenshot = pyautogui.screenshot()
-            print(f"📸 Screenshot taken: {screenshot.size}")
-            return screenshot
-        except Exception as e:
-            print(f"❌ Screenshot failed: {e}")
+            logger.error(f"Finding Metin2 window failed: {e}")
             return None
     
-    def image_to_base64(self, image):
-        """Convert PIL image to base64 for Gemini"""
-        try:
-            buffer = io.BytesIO()
-            image.save(buffer, format='PNG')
-            image_bytes = buffer.getvalue()
-            return base64.b64encode(image_bytes).decode('utf-8')
-        except Exception as e:
-            print(f"❌ Image conversion failed: {e}")
-            return None
+    def reset_state(self):
+        """Reset bot state - SellMerchant pattern for error recovery"""
+        logger.info("Resetting bot state...")
+        self.__init__()
     
-    def analyze_screen(self, image):
-        """Basic stone detection with Gemini Flash"""
+    def ensure_stone_screen_region(self) -> bool:
+        """Ensure screen region is valid - SellMerchant pattern"""
         try:
-            # Check daily limits
-            if self.request_count >= self.MAX_DAILY_REQUESTS:
-                print("⛔ Daily request limit reached!")
-                return None
+            if not self.hwnd or not wn.IsWindow(self.hwnd):
+                logger.error("Invalid window handle, resetting...")
+                self.hwnd = self._find_metin2_window()
+                if not self.hwnd:
+                    return False
             
-            # Convert image to base64
-            image_b64 = self.image_to_base64(image)
-            if not image_b64:
-                return None
+            # SellMerchant pattern: Bring window to foreground
+            bring_window_to_foreground(self.hwnd)
             
-            # Create image part for Gemini
-            image_part = Part.from_bytes(
-                data=base64.b64decode(image_b64),
-                mime_type="image/png"
+            # SellMerchant pattern: Handle fullscreen
+            if is_fullscreen(self.hwnd):
+                toggle_fullscreen(self.hwnd)
+                time.sleep(1)  # SellMerchant uses 1 second delay
+            
+            # SellMerchant pattern: Update screen region
+            window_rect = wn.GetWindowRect(self.hwnd)
+            self.all_screen_region = window_rect  # SellMerchant uses GetWindowRect directly
+            
+            logger.debug(f"Screen region updated: {self.all_screen_region}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to ensure screen region: {e}")
+            return False
+    
+    def find_stone_in_screen(self, stone_name: str = "stone") -> bool:
+        """Find stone using SellMerchant template matching pattern"""
+        try:
+            # SellMerchant pattern: Ensure screen region is valid
+            if not self.ensure_stone_screen_region():
+                logger.error("Screen region not available")
+                return False
+            
+            # Check if template file exists
+            if not os.path.exists(self.stone_template_path):
+                logger.error(f"Template file not found: {self.stone_template_path}")
+                return False
+            
+            # SellMerchant pattern: Primary detection with find_template_location_colored
+            stone_detection = find_template_location_colored(
+                template_path=self.stone_template_path,
+                screenshot_region=self.all_screen_region
             )
             
-            # Send to Gemini Flash
-            response = self.client.models.generate_content(
-                model="gemini-2.0-flash-exp",
-                contents=[self.STONE_DETECTION_PROMPT, image_part]
-            )
-            
-            self.request_count += 1
-            print(f"🤖 Gemini request #{self.request_count}")
-            
-            # Extract response text
-            if response.candidates and response.candidates[0].content:
-                result = response.candidates[0].content.parts[0].text.strip()
-                print(f"🔍 Gemini response: {result}")
-                return result
+            if stone_detection:
+                # SellMerchant format: (global_x, global_y, h, w, max_val)
+                center_x, center_y, h, w, confidence = stone_detection
+                
+                # SellMerchant pattern: Store in locations dictionary for caching
+                self.stone_locations[stone_name] = [stone_detection]
+                
+                self.stats['detections'] += 1
+                logger.info(f"Found stone at ({center_x}, {center_y}) - confidence: {confidence:.3f}")
+                return True
             else:
-                print("❌ No response from Gemini")
-                return None
+                # SellMerchant pattern: Try fallback method with find_all_template_locations
+                logger.debug("Primary detection failed, trying find_all_template_locations...")
                 
-        except Exception as e:
-            print(f"❌ Gemini analysis failed: {e}")
-            return None
-    
-    def extract_coordinates(self, response):
-        """Parse coordinates from Gemini response"""
-        try:
-            if not response or response == "NONE":
-                return None, None
-            
-            # Simple coordinate parsing
-            if "," in response:
-                parts = response.split(",")
-                if len(parts) >= 2:
-                    x = int(parts[0].strip())
-                    y = int(parts[1].strip())
-                    
-                    # Basic validation
-                    screen_width, screen_height = pyautogui.size()
-                    if 0 <= x <= screen_width and 0 <= y <= screen_height:
-                        return x, y
-                    else:
-                        print(f"⚠️ Coordinates out of bounds: ({x}, {y})")
-                        return None, None
-            
-            print(f"⚠️ Invalid coordinate format: {response}")
-            return None, None
-            
-        except Exception as e:
-            print(f"❌ Coordinate extraction failed: {e}")
-            return None, None
-    
-    def click_stone(self, x, y):
-        """Simple click with basic validation"""
-        try:
-            pyautogui.click(x, y)
-            print(f"🖱️ Clicked stone at ({x}, {y})")
-            time.sleep(1)  # Brief pause after clicking
-        except Exception as e:
-            print(f"❌ Click failed: {e}")
-    
-    def run_basic_loop(self):
-        """Main execution loop - keep it simple"""
-        print("🎮 Starting Metin2 Stone Bot MVP 1")
-        print("⏹️ Press Ctrl+C to stop")
-        
-        try:
-            while True:
-                print(f"\n--- Cycle {self.request_count + 1} ---")
+                stone_locations = find_all_template_locations(
+                    template_path=self.stone_template_path,
+                    screenshot_region=self.all_screen_region
+                )
                 
-                # Check daily limits
-                if self.request_count >= self.MAX_DAILY_REQUESTS:
-                    print("⛔ Daily request limit reached, stopping...")
-                    break
-                
-                # Take screenshot
-                screenshot = self.take_screenshot()
-                if not screenshot:
-                    print("⚠️ Screenshot failed, retrying in 5 seconds...")
-                    time.sleep(5)
-                    continue
-                
-                # Analyze for stones
-                response = self.analyze_screen(screenshot)
-                if not response:
-                    print("⚠️ Analysis failed, retrying in 5 seconds...")
-                    time.sleep(5)
-                    continue
-                
-                # Extract coordinates
-                x, y = self.extract_coordinates(response)
-                
-                if x is not None and y is not None:
-                    # Click on stone
-                    self.click_stone(x, y)
-                    print("✅ Stone clicked successfully")
+                if stone_locations:
+                    # SellMerchant pattern: Store all detections
+                    self.stone_locations[stone_name] = stone_locations
+                    self.stats['detections'] += len(stone_locations)
+                    logger.info(f"Found {len(stone_locations)} stones with fallback method")
+                    return True
                 else:
-                    print("🔍 No stones found, waiting...")
-                
-                # Delay between requests
-                print(f"⏱️ Waiting {self.REQUEST_DELAY} seconds...")
-                time.sleep(self.REQUEST_DELAY)
-                
-        except KeyboardInterrupt:
-            print("\n⏹️ Bot stopped by user")
+                    logger.debug("No stones detected with either method")
+                    return False
+            
         except Exception as e:
-            print(f"\n❌ Unexpected error: {e}")
-        
-        print(f"📊 Total requests made: {self.request_count}")
-        print("🏁 Bot session ended")
+            logger.error(f"Stone detection failed: {e}", exc_info=True)
+            return False
+    
+    
+    
 
-def test_mvp1():
-    """Quick MVP 1 functionality test"""
-    print("🧪 Testing MVP 1 Stone Bot...")
-    
-    project_id = os.getenv('GOOGLE_CLOUD_PROJECT')
-    if not project_id:
-        print("❌ GOOGLE_CLOUD_PROJECT not set in environment")
-        return False
-    
-    try:
-        # Initialize bot
-        bot = SimpleStoneBot(project_id)
-        
-        # Test screenshot
-        img = bot.take_screenshot()
-        if img:
-            print(f"✅ Screenshot test passed: {img.size}")
-        else:
-            print("❌ Screenshot test failed")
+    def process_single_stone(self, stone_name: str = "stone") -> bool:
+        """Process single stone click - SellMerchant pattern from process_single_item"""
+        try:
+            # SellMerchant pattern: Ensure screen region is valid
+            if not self.ensure_stone_screen_region():
+                logger.error("Screen region not available")
+                return False
+            
+            # SellMerchant pattern: Find stone in screen (like find_item_in_inventory)
+            if not self.find_stone_in_screen(stone_name):
+                logger.debug(f"Stone '{stone_name}' not found")
+                return False
+            
+            # SellMerchant pattern: Get cached location and process
+            if stone_name not in self.stone_locations or not self.stone_locations[stone_name]:
+                logger.error(f"No cached location for stone '{stone_name}'")
+                return False
+            
+            # SellMerchant pattern: Get first detection from cache
+            stone_location = self.stone_locations[stone_name].pop(0)
+            center_x, center_y, h, w, confidence = stone_location
+            
+            # SellMerchant pattern: Move mouse to target (like process_sell_item line 168)
+            pyautogui.moveTo(center_x, center_y)
+            logger.debug(f"Mouse moved to stone at ({center_x}, {center_y})")
+            
+            # FIX: click_on_window expects CLIENT coordinates, but we have SCREEN coordinates
+            # Convert screen coordinates to client coordinates for click_on_window
+            try:
+                # Get window rectangle
+                window_rect = wn.GetWindowRect(self.hwnd)
+                
+                # Convert screen to client coordinates  
+                client_x = center_x - window_rect[0]
+                client_y = center_y - window_rect[1]
+                
+                logger.debug(f"Screen coords: ({center_x}, {center_y}) -> Client coords: ({client_x}, {client_y})")
+                
+                # SellMerchant pattern: Click using click_on_window with CLIENT coordinates
+                success = click_on_window(self.hwnd, x=client_x, y=client_y, click_times=1)
+                
+            except Exception as coord_error:
+                logger.warning(f"Coordinate conversion failed: {coord_error}, trying direct click...")
+                
+                # Fallback: Direct pyautogui click at screen coordinates
+                try:
+                    pyautogui.click(center_x, center_y)
+                    success = True
+                    logger.debug("Fallback pyautogui click successful")
+                except Exception as click_error:
+                    logger.error(f"Direct click also failed: {click_error}")
+                    success = False
+            
+            if success:
+                self.stats['clicks'] += 1
+                logger.info(f"Successfully clicked stone at ({center_x}, {center_y}) - confidence: {confidence:.3f}")
+                
+                # SellMerchant pattern: Apply click delay from constants
+                time.sleep(self.click_delay)
+                return True
+            else:
+                logger.error(f"Click failed at ({center_x}, {center_y})")
+                self.stats['failures'] += 1
+                return False
+            
+        except Exception as e:
+            logger.error(f"Process single stone failed: {e}", exc_info=True)
+            self.stats['failures'] += 1
             return False
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    def run_farming(self):
+        """Main farming loop using exact SellMerchant pattern"""
+        if not self.hwnd:
+            logger.error("Cannot start farming - Metin2 window not found")
+            return
         
-        # Test image conversion
-        b64 = bot.image_to_base64(img)
-        if b64:
-            print("✅ Image conversion test passed")
-        else:
-            print("❌ Image conversion test failed")
-            return False
+        logger.info("Starting stone farming with SellMerchant patterns...")
+        logger.info("Press Ctrl+C to stop")
         
-        print("🎮 Ready for Metin2 testing!")
-        print("💡 Use bot.run_basic_loop() to start farming")
-        return True
+        self.running = True
+        self.stats['start_time'] = time.time()
+        stone_name = "stone"  # SellMerchant pattern: item name
         
-    except Exception as e:
-        print(f"❌ Test failed: {e}")
-        return False
+        while self.running:
+            try:
+                # SellMerchant pattern: Process single stone (like process_single_item)
+                success = self.process_single_stone(stone_name)
+                
+                if success:
+                    logger.info("Successfully processed stone")
+                    self.consecutive_failures = 0  # Reset failure counter
+                else:
+                    logger.debug("Stone processing failed")
+                    self.consecutive_failures += 1
+                    
+                    # SellMerchant pattern: Reset state on consecutive failures
+                    if self.consecutive_failures >= self.max_failures:
+                        logger.warning(f"Too many consecutive failures ({self.max_failures}), resetting state...")
+                        self.reset_state()
+                        
+                        # Check if reset was successful
+                        if not self.hwnd:
+                            logger.error("Reset failed - no window handle. Stopping bot.")
+                            break
+                        else:
+                            logger.info("State reset successful, continuing...")
+                            self.consecutive_failures = 0
+                
+                # SellMerchant pattern: Wait between operations
+                time.sleep(self.scan_interval)
+                
+            except KeyboardInterrupt:
+                logger.info("Keyboard interrupt received")
+                break
+            except Exception as e:
+                logger.error(f"Unexpected error in farming loop: {e}", exc_info=True)
+                self.stats['failures'] += 1
+                self.consecutive_failures += 1
+                
+                # SellMerchant pattern: Reset on persistent errors
+                if self.consecutive_failures >= self.max_failures:
+                    logger.error("Too many consecutive errors, resetting state...")
+                    self.reset_state()
+                    if not self.hwnd:
+                        logger.error("Reset failed after errors. Stopping bot.")
+                        break
+                    self.consecutive_failures = 0
+                
+                # Brief delay before retry
+                time.sleep(1)
+        
+        self.cleanup()
+    
+    def cleanup(self):
+        """Cleanup and show final statistics - SellMerchant pattern"""
+        self.running = False
+        
+        if self.stats['start_time']:
+            runtime = time.time() - self.stats['start_time']
+            logger.info("=== StoneBot Session Statistics ===")
+            logger.info(f"Runtime: {runtime:.1f} seconds")
+            logger.info(f"Detections: {self.stats['detections']}")
+            logger.info(f"Clicks: {self.stats['clicks']}")
+            logger.info(f"Failures: {self.stats['failures']}")
+            
+            if self.stats['detections'] > 0:
+                success_rate = (self.stats['clicks'] / self.stats['detections']) * 100
+                logger.info(f"Success rate: {success_rate:.1f}%")
+            
+            # SellMerchant pattern: Calculate efficiency metrics
+            if runtime > 0:
+                clicks_per_minute = (self.stats['clicks'] / runtime) * 60
+                logger.info(f"Clicks per minute: {clicks_per_minute:.1f}")
+        
+        logger.info("StoneBot stopped successfully - SellMerchant pattern")
+
 
 def main():
-    """Main entry point"""
-    print("🚀 Metin2 Stone Bot MVP 1")
-    print("=" * 40)
-    
-    # Check environment
-    project_id = os.getenv('GOOGLE_CLOUD_PROJECT')
-    if not project_id:
-        print("❌ Please set GOOGLE_CLOUD_PROJECT in your .env file")
-        print("💡 Example: GOOGLE_CLOUD_PROJECT=your-project-id")
-        return
-    
-    # Run test first
-    if not test_mvp1():
-        print("❌ Tests failed, please check your setup")
-        return
-    
-    # Ask user to start
-    print("\n" + "=" * 40)
-    start = input("🎯 Start stone farming? (y/N): ").lower().strip()
-    
-    if start == 'y':
-        bot = SimpleStoneBot(project_id)
-        bot.run_basic_loop()
-    else:
-        print("👋 Goodbye!")
+    """Main entry point - SellMerchant error handling pattern"""
+    try:
+        logger.info("Starting StoneBot with SellMerchant patterns...")
+        bot = StoneBot()
+        
+        if not bot.hwnd:
+            logger.error("Failed to initialize bot - no window handle")
+            sys.exit(1)
+        
+        # SellMerchant pattern: Start main loop
+        bot.run_farming()
+        
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Fatal error in main: {e}", exc_info=True)
+        sys.exit(1)
+    finally:
+        logger.info("StoneBot main function completed")
+
 
 if __name__ == "__main__":
     main()
