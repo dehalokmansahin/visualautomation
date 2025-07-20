@@ -1,0 +1,15 @@
+# Metin2 Stone Bot MVP 1 - Required Dependencies
+
+# Google Vertex AI Gemini
+google-genai>=0.3.0
+
+# Computer Vision and Screenshots
+opencv-python>=4.8.0
+pyautogui>=0.9.54
+pillow>=10.0.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Additional dependencies that might be needed
+numpy>=1.24.0
